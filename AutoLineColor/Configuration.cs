@@ -2,7 +2,6 @@
 using System.IO;
 using System.Xml;
 using System.Xml.Serialization;
-using ColossalFramework.IO;
 
 namespace AutoLineColor
 {
@@ -11,48 +10,154 @@ namespace AutoLineColor
     {
         public ColorStrategy ColorStrategy { get; set; }
         public NamingStrategy NamingStrategy { get; set; }
-        public int? MinimumColorDifferencePercentage { get; set; }
-        public int? MaximunDifferentCollorPickAtempt { get; set; }
+        public int? MinColorDiffPercentage { get; set; }
+        public int? MaxDiffColorPickAttempt { get; set; }
+        public volatile bool UndigestedChanges;
 
-        private const string ConfigFileName = "AutoLineColorSettings.xml";
-        private const string ModName = "AutoLineColor";
+        //Staged changes. These are not applied until 'Save' is clicked
+        private ColorStrategy? StagedColorStrategy { get; set; }
+        private NamingStrategy? StagedNamingStrategy { get; set; }
+        private int? StagedMinColorDiffPercentage { get; set; }
+        private int? StagedMaxDiffColorPickAttempt { get; set; }
+
+
+        private const int DefaultMaxDiffColorPickAttempt = 10;
+        private const int DefaultMinColorDiffPercent = 5;
+
+        private static Configuration _instance;
+        private static Console logger = Console.Instance;
 
         public static Configuration LoadConfig()
         {
+            bool isDirty = false;
+            Configuration config;
             try
             {
                 var serializer = new XmlSerializer(typeof(Configuration));
-                Configuration config;
+                var fullConfigPath = Constants.ConfigFileName;
 
-                var fullConfigPath = GetModFileName(ConfigFileName);
                 if (File.Exists(fullConfigPath) == false)
                 {
-                    Console.Message("No config file. Building default and writing it to " + fullConfigPath);
+                    logger.Message("No config file. Building default and writing it to " + fullConfigPath);
                     config = GetDefaultConfig();
-                    SaveConfig(config);
-                    return config;
+                    isDirty = true;
                 }
-
-
-                using (var reader = XmlReader.Create(fullConfigPath))
+                else
                 {
-                    config = (Configuration)serializer.Deserialize(reader);
-                }
-                //check new configuration properties
-                if (!config.MaximunDifferentCollorPickAtempt.HasValue || !config.MinimumColorDifferencePercentage.HasValue)
-                {
-                    var defaultConfig = GetDefaultConfig();
-                    config.MinimumColorDifferencePercentage = defaultConfig.MinimumColorDifferencePercentage;
-                    config.MaximunDifferentCollorPickAtempt = defaultConfig.MaximunDifferentCollorPickAtempt;
-                    SaveConfig(config);
-                }
-                return config;
+                    logger.Message("Config file exists. Using it");
+                    using (var reader = XmlReader.Create(fullConfigPath)) {
+                        config = (Configuration)serializer.Deserialize(reader);
+                    }
 
+                    //check new configuration properties
+                    if (!config.MaxDiffColorPickAttempt.HasValue ||
+                        !config.MinColorDiffPercentage.HasValue) {
+
+                        config.UndigestedChanges = false;
+                        config.MaxDiffColorPickAttempt = config.MaxDiffColorPickAttempt.HasValue ?
+                        config.MaxDiffColorPickAttempt : DefaultMaxDiffColorPickAttempt;
+                        config.MinColorDiffPercentage = config.MinColorDiffPercentage.HasValue ?
+                            config.MinColorDiffPercentage : DefaultMinColorDiffPercent;
+
+                        isDirty = true;
+                    }
+                }
             }
             catch (Exception ex)
             {
-                Console.Error("Error reading configuration settings - " + ex);
-                return GetDefaultConfig();
+                //Don't save changes if it failed for some reason
+                logger.Error("Error reading configuration settings - " + ex);
+                config = GetDefaultConfig();
+            }
+
+            if (isDirty)
+            {
+                config.Save();
+            }
+
+            return config;
+        }
+
+        public void ColorStrategyChange(int Strategy)
+        {
+            this.StagedColorStrategy = (ColorStrategy)Strategy;
+        }
+
+        public void NamingStrategyChange(int Strategy)
+        {
+            this.StagedNamingStrategy = (NamingStrategy)Strategy;
+        }
+
+        public void MinColorDiffChange(float MinDiff)
+        {
+            this.StagedMinColorDiffPercentage = (int)MinDiff;
+        }
+
+        public void MaxDiffColorPickChange(float MaxColorPicks)
+        {
+            this.StagedMaxDiffColorPickAttempt = (int)MaxColorPicks;
+        }
+
+        public void FlushStagedChanges()
+        {
+            StagedColorStrategy = null;
+            StagedNamingStrategy = null;
+            StagedMaxDiffColorPickAttempt = null;
+            StagedMinColorDiffPercentage = null;
+        }
+
+        public void Save()
+        {
+            var serializer = new XmlSerializer(typeof(Configuration));
+
+            logger.Message("Saving changes to config file");
+
+            //If any changes have occured, apply them, otherwise keep the current value
+            this.ColorStrategy = this.StagedColorStrategy.HasValue
+                ? this.StagedColorStrategy.Value
+                : this.ColorStrategy;
+            this.NamingStrategy = this.StagedNamingStrategy.HasValue
+                ? this.StagedNamingStrategy.Value
+                : this.NamingStrategy;
+            this.MaxDiffColorPickAttempt =
+                this.StagedMaxDiffColorPickAttempt.HasValue
+                    ? this.StagedMaxDiffColorPickAttempt.Value
+                    : this.MaxDiffColorPickAttempt;
+            this.MinColorDiffPercentage =
+                this.StagedMinColorDiffPercentage.HasValue
+                    ? this.StagedMinColorDiffPercentage.Value
+                    : this.MinColorDiffPercentage;
+
+            //clear changes and log
+            if (this.StagedColorStrategy.HasValue)
+            {
+                logger.Message("ColorStrategy changed to " + this.StagedColorStrategy.Value.ToString());
+            }
+
+            if (this.StagedNamingStrategy.HasValue)
+            {
+                logger.Message("NamingStrategy changed to " + this.StagedNamingStrategy.Value.ToString());
+            }
+
+            if (this.StagedMaxDiffColorPickAttempt.HasValue)
+            {
+                logger.Message("MaxDiffColorPickAttempt changed to " + this.StagedMaxDiffColorPickAttempt.Value.ToString());
+            }
+
+            if (this.StagedMinColorDiffPercentage.HasValue)
+            {
+                logger.Message("MinColorDiffPercentage changed to " + this.StagedMinColorDiffPercentage.Value.ToString());
+            }
+
+            FlushStagedChanges();
+
+            //How we let the ColorMonitor thread know to update the strategies
+            logger.Message("Marking undigested changes");
+            this.UndigestedChanges = true;
+
+            //Save to disk
+            using (var writer = XmlWriter.Create(Constants.ConfigFileName)) {
+                serializer.Serialize(writer, this);
             }
         }
 
@@ -67,20 +172,12 @@ namespace AutoLineColor
             {
                 ColorStrategy = ColorStrategy.RandomColor,
                 NamingStrategy = NamingStrategy.Districts,
-                MaximunDifferentCollorPickAtempt = 10,
-                MinimumColorDifferencePercentage = 5
+                MaxDiffColorPickAttempt = DefaultMaxDiffColorPickAttempt,
+                MinColorDiffPercentage = DefaultMinColorDiffPercent,
+                UndigestedChanges = false
             };
         }
-        private static void SaveConfig(Configuration config)
-        {
-            var serializer = new XmlSerializer(typeof(Configuration));
-            using (var writer = XmlWriter.Create(GetModFileName(ConfigFileName)))
-            {
-                serializer.Serialize(writer, config);
-            }
-        }
 
-        private static Configuration _instance;
         public static Configuration Instance
         {
             get
@@ -92,7 +189,6 @@ namespace AutoLineColor
                 return _instance;
             }
         }
-
     }
 
     public enum ColorStrategy

@@ -13,29 +13,31 @@ namespace AutoLineColor
 {
     public class ColorMonitor : ThreadingExtensionBase
     {
-        private static DateTimeOffset _lastOutputTime = DateTimeOffset.Now.AddSeconds(-100);
+        private static DateTimeOffset _nextUpdateTime = DateTimeOffset.Now;
         private bool _initialized;
         private IColorStrategy _colorStrategy;
         private INamingStrategy _namingStrategy;
         private List<Color32> _usedColors;
+        private Configuration _config;
+        private static Console logger = Console.Instance;
 
         public override void OnCreated(IThreading threading)
         {
-
-            Console.Message("loading auto color monitor");
-            Console.Message("initializing colors");
+            logger.Message("===============================");
+            logger.Message("Initializing auto color monitor");
+            logger.Message("Initializing colors");
             RandomColor.Initialize();
             CategorisedColor.Initialize();
             GenericNames.Initialize();
 
-            Console.Message("loading current config");
-            var config = Configuration.LoadConfig();
-            _colorStrategy = SetColorStrategy(config.ColorStrategy);
-            _namingStrategy = SetNamingStrategy(config.NamingStrategy);
+            logger.Message("Loading current config");
+            _config = Configuration.Instance;
+            _colorStrategy = SetColorStrategy(_config.ColorStrategy);
+            _namingStrategy = SetNamingStrategy(_config.NamingStrategy);
             _usedColors = new List<Color32>();
 
-            Console.Message("Found color strategy of " + config.ColorStrategy);
-            Console.Message("Found naming strategy of " + config.NamingStrategy);
+            logger.Message("Found color strategy of " + _config.ColorStrategy);
+            logger.Message("Found naming strategy of " + _config.NamingStrategy);
 
             _initialized = true;
 
@@ -45,6 +47,7 @@ namespace AutoLineColor
 
         private static INamingStrategy SetNamingStrategy(NamingStrategy namingStrategy)
         {
+            logger.Message("Naming Strategy: " + namingStrategy.ToString());
             switch (namingStrategy)
             {
                 case NamingStrategy.None:
@@ -54,13 +57,14 @@ namespace AutoLineColor
                 case NamingStrategy.London:
                     return new LondonNamingStrategy();
                 default:
-                    Console.Error("unknown naming strategy");
+                    logger.Error("unknown naming strategy");
                     return new NoNamingStrategy();
             }
         }
 
-        private static IColorStrategy SetColorStrategy(ColorStrategy colorStrategy)
+        private IColorStrategy SetColorStrategy(ColorStrategy colorStrategy)
         {
+            logger.Message("Color Strategy: " + colorStrategy.ToString());
             switch (colorStrategy)
             {
                 case ColorStrategy.RandomHue:
@@ -70,85 +74,88 @@ namespace AutoLineColor
                 case ColorStrategy.CategorisedColor:
                     return new CategorisedColorStrategy();
                 default:
-                    Console.Error("unknown color strategy");
+                    logger.Error("unknown color strategy");
                     return new RandomHueStrategy();
             }
         }
 
         public override void OnUpdate(float realTimeDelta, float simulationTimeDelta)
-        {
+        {   //Digest changes
+            if (_config.UndigestedChanges == true) {
+                logger.Message("Applying undigested changes");
+                _colorStrategy = SetColorStrategy(_config.ColorStrategy);
+                _namingStrategy = SetNamingStrategy(_config.NamingStrategy);
+                _config.UndigestedChanges = false;
+            }
+
+            if (_initialized == false)
+                return;
+
+            // try and limit how often we are scanning for lines. this ain't that important
+            if (_nextUpdateTime >= DateTimeOffset.Now)
+                return;
+
             var theTransportManager = Singleton<TransportManager>.instance;
             var lines = theTransportManager.m_lines.m_buffer;
 
             try
             {
-                if (_initialized == false)
-                    return;
-
-
-                // try and limit how often we are scanning for lines. this ain't that important
-                if (_lastOutputTime.AddMilliseconds(1000) >= DateTimeOffset.Now)
-                    return;
-
-
-
-                _lastOutputTime = DateTimeOffset.Now;
-
-                while (!Monitor.TryEnter(lines, SimulationManager.SYNCHRONIZE_TIMEOUT))
-                { }
-
-                
+                _nextUpdateTime = DateTimeOffset.Now.AddSeconds(10);
                 _usedColors = lines.Where(l => l.IsActive()).Select(l => l.m_color).ToList();
 
-                for (ushort counter = 0; counter < lines.Length - 1; counter++)
+                for (ushort i = 0; i < theTransportManager.m_lines.m_buffer.Length - 1; i++)
                 {
-                    var transportLine = lines[counter];
-<<<<<<< Updated upstream
-=======
+                    var transportLine = lines[i];
+                    //logger.Message(string.Format("Starting on line {0}", i));
 
-
->>>>>>> Stashed changes
                     if (transportLine.m_flags == TransportLine.Flags.None)
                         continue;
 
+                    if (!transportLine.Complete)
+                        continue;
 
                     // only worry about fully created lines 
                     if (!transportLine.IsActive() || transportLine.HasCustomName() || !transportLine.m_color.IsDefaultColor())
                         continue;
 
-                    logger.Message("work to be done!");
+                    logger.Message(string.Format("Working on line {0}", i));
 
-                    var lineName = _namingStrategy.GetName(transportLine);
-                    var color = _colorStrategy.GetColor(transportLine, _usedColors);
-
-                    Console.Message(string.Format("New line found. {0} {1}", lineName, color));
+                    var instanceID = new InstanceID();
+                    var lineName = theTransportManager.GetLineName(i);
+                    var newName = _namingStrategy.GetName(transportLine);
 
                     if (!transportLine.HasCustomColor() || transportLine.m_color.IsDefaultColor())
                     {
-                        // set the color
+                        var color = _colorStrategy.GetColor(transportLine, _usedColors);
+                        
+                        logger.Message(string.Format("About to change line color to {0}", color));
                         transportLine.m_color = color;
                         transportLine.m_flags |= TransportLine.Flags.CustomColor;
-                    }
-                    else
-                    {
-                        Console.Message(transportLine.m_color.ToString());
+                        theTransportManager.SetLineColor(i, color);
+
+                        logger.Message(string.Format("Changed line color. '{0}' {1} -> {2}", lineName, theTransportManager.GetLineColor(i), color));
                     }
 
-                    if (string.IsNullOrEmpty(lineName) == false && transportLine.HasCustomName() == false)
-                    {
-                        logger.Message("New line name time!");
-                        // set the name
-                        Singleton<InstanceManager>.instance.SetName(new InstanceID { TransportLine = counter },
-                            lineName);
+                    if (string.IsNullOrEmpty(newName) == false &&
+                        transportLine.HasCustomName() == false) {
+                        logger.Message(string.Format("About to rename line to {0}", newName));
+                        
                         transportLine.m_flags |= TransportLine.Flags.CustomName;
+                        theTransportManager.SetLineName(i, newName);
+
+                        logger.Message(string.Format("Renamed Line '{0}' -> '{1}'", lineName, newName));
                     }
 
-                    lines[counter] = transportLine;
+                    logger.Message(string.Format("Line is now {0} and {1}", 
+                        theTransportManager.GetLineName(i),
+                        theTransportManager.GetLineColor(i)));
+
+                    lines[i] = transportLine;
                 }
             }
             catch (Exception ex)
             {
-                Console.Message(ex.ToString(), PluginManager.MessageType.Message);
+                logger.Error(ex.ToString());
             }
             finally
             {
@@ -180,7 +187,7 @@ namespace AutoLineColor
 
         public static bool IsActive(this TransportLine transportLine)
         {
-            if ((transportLine.m_flags & (TransportLine.Flags.Complete | TransportLine.Flags.Created | TransportLine.Flags.Hidden)) == 0)
+            if ((transportLine.m_flags & (TransportLine.Flags.Created | TransportLine.Flags.Hidden)) == 0)
                 return false;
 
             // stations are marked with this flag
