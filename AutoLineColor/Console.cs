@@ -4,39 +4,127 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using UnityEngine;
 
 namespace AutoLineColor
 {
-    public static class Console
+    public class Console
     {
+        private static Console _instance;
+        private bool _debug = false;
+
+        private StreamWriter log;
+        private bool log_opened;
+
+        private Console()
+        {
 #if DEBUG
-        private static bool debug = true;
-#else
-        private static bool debug = false;
+            _debug = true;
 #endif
-
-        public static void Message(string p, PluginManager.MessageType messageType)
-        {
-            if (!debug)
-                return;
-
-            DebugOutputPanel.AddMessage(messageType, p);
+            try
+            {
+                log = new StreamWriter(new FileStream(Constants.LogFileName, FileMode.Append | FileMode.Create, FileAccess.Write, FileShare.ReadWrite));
+                log_opened = true;
+            }
+            catch
+            {
+                WriteMessage("Could not open log file", PluginManager.MessageType.Warning);
+            }
         }
 
-        public static void Message(string p)
+        public static Console Instance
         {
-            if (!debug)
-                return;
-
-            DebugOutputPanel.AddMessage(PluginManager.MessageType.Message, p);
+            get
+            {
+                if (_instance == null)
+                {
+                    _instance = new Console();
+                }
+                return _instance;
+            }
         }
 
-        internal static void Error(string p)
+        public bool debug
         {
-            if (!debug)
-                return;
+            get
+            {
+                return _debug;
+            }
+        }
 
-            DebugOutputPanel.AddMessage(PluginManager.MessageType.Error, p);
+        private static string FormatMessage(string msg, PluginManager.MessageType Type)
+        {
+            string formatted;
+            try
+            {
+                formatted = string.Format("[AutoLineColor] {0:yyyy-MM-dd hh:mm:ss} ({1}) {2}", DateTime.Now, Type.ToString(), msg);
+            }
+            catch (Exception e)
+            {
+                DebugOutputPanel.AddMessage(PluginManager.MessageType.Error, e.ToString());
+                formatted = msg;
+            }
+            return formatted;
+        }
+
+        public void ToggleDebug()
+        {
+            _debug = !_debug;
+        }
+
+        public void SetDebug(bool should_debug)
+        {
+            _debug = should_debug;
+        }
+
+        public void Message(string p, PluginManager.MessageType messageType)
+        {
+            this.WriteMessage(p, messageType);
+        }
+
+        public void Message(string p)
+        {
+            this.WriteMessage(p, PluginManager.MessageType.Message);
+        }
+
+        public void Warning(string p) {
+            this.WriteMessage(p, PluginManager.MessageType.Warning);
+        }
+
+        public void Error(string p)
+        {
+            this.WriteMessage(p, PluginManager.MessageType.Error);
+        }
+
+        private void WriteMessage(string p, PluginManager.MessageType Type)
+        {
+            if(!this._debug)
+            {
+                return;
+            }
+            string msg = FormatMessage(p, Type);
+            DebugOutputPanel.AddMessage(Type, msg);
+            if (log_opened) {
+                log.WriteLine(msg);
+                log.Flush();
+            }
+
+            //Unity engine logger
+            switch(Type)
+            {
+                case PluginManager.MessageType.Error:
+                    Debug.LogError(msg);
+                    break;
+                case PluginManager.MessageType.Message:
+                    Debug.Log(msg);
+                    break;
+                case PluginManager.MessageType.Warning:
+                    Debug.LogWarning(msg);
+                    break;
+                default:
+                    Debug.Log(msg);
+                    break;
+            }
         }
     }
 }

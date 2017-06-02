@@ -7,7 +7,7 @@ using Random = UnityEngine.Random;
 
 namespace AutoLineColor.Naming
 {
-    internal class LondonNamingStrategy : INamingStrategy
+    internal class LondonNamingStrategy : NamingStrategyBase
     {
         private static string[] _trains =
         {
@@ -24,84 +24,7 @@ namespace AutoLineColor.Naming
             "Pride of {0}",
         };
 
-        public string GetName(TransportLine transportLine)
-        {
-            switch (transportLine.Info.m_transportType)
-            {
-            case TransportInfo.TransportType.Bus:
-                return GetBusLineName (transportLine);
-            case TransportInfo.TransportType.Metro:
-                return GetMetroLineName (transportLine);
-            default:
-                return GetTrainLineName (transportLine);
-            }
-        }
 
-        private void AnalyzeLine(TransportLine transportLine, List<string> districtNames, out int districtCount, out int stopCount, out bool nonDistrict)
-        {
-            var theNetManager = Singleton<NetManager>.instance;
-            var theDistrictManager = Singleton<DistrictManager>.instance;
-            var stop = transportLine.m_stops;
-            var firstStop = stop;
-            stopCount = 0;
-            districtCount = 0;
-            nonDistrict = false;
-            do
-            {
-                var stopInfo = theNetManager.m_nodes.m_buffer[stop];
-                var district = theDistrictManager.GetDistrict(stopInfo.m_position);
-
-                if (district == 0)
-                {
-                    nonDistrict = true;
-                }
-                else
-                {
-                    var districtName = theDistrictManager.GetDistrictName(district).Trim();
-                    if (!districtNames.Contains(districtName))
-                    {
-                        districtNames.Add(districtName);
-                        districtCount++;
-                    }
-                }
-
-                stop = TransportLine.GetNextStop (stop);
-                stopCount++;
-            } while (stopCount < 25 && stop != firstStop);
-        }
-
-        private static string GetInitials(string words)
-        {
-            string initials = words[0].ToString();
-            for (int i = 0; i < words.Length - 1; i++)
-            {
-                if (words [i] == ' ')
-                {
-                    initials += words[i + 1];
-                }
-            }
-            return initials;
-        }
-
-        private static List<string> GetExistingNames()
-        {
-            var names = new List<string>();
-            var theTransportManager = Singleton<TransportManager>.instance;
-            var theInstanceManager = Singleton<InstanceManager>.instance;
-            var lines = theTransportManager.m_lines.m_buffer;
-            for (ushort lineIndex = 0; lineIndex < lines.Length - 1; lineIndex++)
-            {
-                if (lines[lineIndex].HasCustomName())
-                {
-                    string name = theInstanceManager.GetName(new InstanceID { TransportLine = lineIndex });
-                    if (!String.IsNullOrEmpty(name))
-                    {
-                        names.Add(name);
-                    }
-                }
-            }
-            return names;
-        }
 
         private static List<string> GetNumbers(List<string> names)
         {
@@ -113,10 +36,7 @@ namespace AutoLineColor.Naming
             return numbers;
         }
 
-        private static string FirstWord(string words)
-        {
-            return words.Contains(" ") ? (words.Substring(0, words.IndexOf(" "))) : words;
-        }
+
 
         private static string TryBakerlooify(string word1, string word2)
         {
@@ -148,13 +68,9 @@ namespace AutoLineColor.Naming
          * 6 Springwood Express
          */
 
-        private string GetBusLineName(TransportLine transportLine)
+        protected override string GetBusLineName(TransportLine transportLine)
         {
-            var districtNames = new List<string>();
-            bool nonDistrict;
-            int districtCount;
-            int stopCount;
-            AnalyzeLine(transportLine, districtNames, out districtCount, out stopCount, out nonDistrict);
+            var analysis = AnalyzeLine(transportLine);
             string prefix = null;
             int number;
             string name = null;
@@ -163,10 +79,10 @@ namespace AutoLineColor.Naming
             var existingNumbers = GetNumbers(existingNames);
 
             // Work out the bus number (and prefix)
-            if (!nonDistrict && districtCount == 1)
+            if (!analysis.HasNonDistrictStop && analysis.Districts.Count == 1)
             {
                 /* District Initials */
-                prefix = GetInitials(districtNames[0]);
+                prefix = GetInitials(analysis.Districts[0]);
                 number = 0;
                 string prefixed_number;
                 do
@@ -178,12 +94,12 @@ namespace AutoLineColor.Naming
             else
             {
                 int step;
-                if (stopCount < 15)
+                if (analysis.StopCount < 15)
                 {
                     number = Random.Range(100, 900);
                     step = Random.Range(7, 20);
                 }
-                else if (stopCount < 30)
+                else if (analysis.StopCount < 30)
                 {
                     number = Random.Range(20, 100);
                     step = Random.Range(2, 10);
@@ -200,29 +116,28 @@ namespace AutoLineColor.Naming
             }
 
             // Work out the bus name
-            if (districtCount == 1)
+            switch (analysis.Districts.Count)
             {
-                name = nonDistrict ? districtNames[0] : "Local";
+                case 1:
+                    name = analysis.HasNonDistrictStop ? analysis.Districts[0] : "Local";
+                    break;
+
+                case 2:
+                    name = String.Format("{0} to {1}", FirstWord(analysis.Districts[0]), FirstWord(analysis.Districts[1]));
+                    break;
+
+                case 3:
+                    name = String.Format("{0}, {1} and {2}",
+                        FirstWord(analysis.Districts[0]), FirstWord(analysis.Districts[1]), FirstWord(analysis.Districts[2]));
+                    break;
+
+                default:
+                    var theSimulationManager = Singleton<SimulationManager>.instance;
+                    name = theSimulationManager.m_metaData.m_CityName;
+                    break;
             }
 
-            if (districtCount == 2)
-            {
-                name = String.Format("{0} to {1}", FirstWord(districtNames[0]), FirstWord(districtNames[1]));
-            }
-
-            if (districtCount == 3)
-            {
-                name = String.Format("{0}, {1} and {2}",
-                    FirstWord(districtNames[0]), FirstWord(districtNames[1]), FirstWord(districtNames[2]));
-            }
-
-            if (districtCount == 0 || districtCount > 3)
-            {
-                var theSimulationManager = Singleton<SimulationManager>.instance;
-                name = theSimulationManager.m_metaData.m_CityName;
-            }
-
-            if (stopCount <= 4)
+            if (analysis.StopCount <= 4)
             {
                 suffix = "Express";
             }
@@ -253,45 +168,47 @@ namespace AutoLineColor.Naming
          * There's also some attempt to "Bakerlooify" line names.  No idea how well that will work.
          */
 
-        private string GetMetroLineName(TransportLine transportLine)
+        protected override string GetMetroLineName(TransportLine transportLine)
         {
-            var districtNames = new List<string>();
-            bool nonDistrict;
-            int districtCount;
-            int stopCount;
-            AnalyzeLine(transportLine, districtNames, out districtCount, out stopCount, out nonDistrict);
+            var analysis = AnalyzeLine(transportLine);
             string name = null;
-            var districtFirstNames = districtNames.Select(FirstWord).ToList();
+            var districtFirstNames = analysis.Districts.Select(FirstWord).ToList();
             var existingNames = GetExistingNames();
             int count = 0;
 
-            if (districtCount == 1)
+            switch (analysis.Districts.Count)
             {
-                name = districtNames[0];
-            }
-            else if (districtCount == 2)
-            {
-                if (districtFirstNames[0].Equals(districtFirstNames[1]))
-                {
-                    name = districtFirstNames[0];
-                }
-                else
-                {
-                    name = TryBakerlooify(districtFirstNames[0], districtFirstNames[1]) ??
-                        TryBakerlooify(districtFirstNames[1], districtFirstNames[0]) ??
-                        String.Format("{0} & {1}", districtFirstNames[0], districtFirstNames[1]);
-                }
-            }
-            else if (districtCount >= 3)
-            {
-                int totalLength = districtFirstNames.Sum(d => d.Length);
-                if (totalLength < 20)
-                {
-                    var districtFirstNamesArray = districtFirstNames.ToArray();
-                    name = String.Format("{0} & {1}",
-                        String.Join(", ", districtFirstNamesArray, 0, districtFirstNamesArray.Length - 1),
-                        districtFirstNamesArray[districtFirstNamesArray.Length - 1]);
-                }
+                case 0:
+                    // empty
+                    break;
+
+                case 1:
+                    name = analysis.Districts[0];
+                    break;
+
+                case 2:
+                    if (districtFirstNames[0].Equals(districtFirstNames[1]))
+                    {
+                        name = districtFirstNames[0];
+                    }
+                    else
+                    {
+                        name = TryBakerlooify(districtFirstNames[0], districtFirstNames[1]) ??
+                            TryBakerlooify(districtFirstNames[1], districtFirstNames[0]) ??
+                            String.Format("{0} & {1}", districtFirstNames[0], districtFirstNames[1]);
+                    }
+                    break;
+
+                default:
+                    int totalLength = districtFirstNames.Sum(d => d.Length);
+                    if (totalLength < 20)
+                    {
+                        var districtFirstNamesArray = districtFirstNames.ToArray();
+                        name = String.Format("{0} & {1}",
+                            String.Join(", ", districtFirstNamesArray, 0, districtFirstNamesArray.Length - 1),
+                            districtFirstNamesArray[districtFirstNamesArray.Length - 1]);
+                    }
+                    break;
             }
 
             var lineName = name == null ? "Metro Line" : String.Format("{0} Line", name);
@@ -316,71 +233,69 @@ namespace AutoLineColor.Naming
          * The name is based on the district names.
          */
 
-        private string GetTrainLineName(TransportLine transportLine)
+        protected override string GetTrainLineName(TransportLine transportLine)
         {
-            var districtNames = new List<string>();
-            bool nonDistrict;
-            int districtCount;
-            int stopCount;
-            AnalyzeLine(transportLine, districtNames, out districtCount, out stopCount, out nonDistrict);
+            var analysis = AnalyzeLine(transportLine);
             string ident = null;
             int number = Random.Range(1, 90);
             string name = null;
-            var districtFirstNames = districtNames.Select(FirstWord).ToList();
+            var districtFirstNames = analysis.Districts.Select(FirstWord).ToList();
             var existingNames = GetExistingNames();
             var existingNumbers = GetNumbers(existingNames);
 
-            var lastDistrictName = districtNames.LastOrDefault();
+            var lastDistrictName = analysis.Districts.LastOrDefault();
             if (String.IsNullOrEmpty(lastDistrictName))
             {
                 lastDistrictName = "Z";
             }
 
-            ident = String.Format("{0}{1}", districtCount, nonDistrict ? "X" : lastDistrictName.Substring(0, 1));
+            ident = String.Format("{0}{1}", analysis.Districts.Count, analysis.HasNonDistrictStop ? "X" : lastDistrictName.Substring(0, 1));
 
-            if (districtCount == 0)
+            switch (analysis.Districts.Count)
             {
-                var theSimulationManager = Singleton<SimulationManager>.instance;
-                name = String.Format(_trains[Random.Range(0, _trains.Length)], theSimulationManager.m_metaData.m_CityName);
-            }
-            else if (districtCount == 1)
-            {
-                name = String.Format(_trains[Random.Range(0, _trains.Length)], districtNames[0]);
-            }
-            else if (districtCount == 2)
-            {
-                if (districtFirstNames[0].Equals(districtFirstNames[1]))
-                {
-                    name = districtFirstNames[0];
-                }
-                else if (stopCount == 2)
-                {
-                    name = String.Format("{0} {1} Shuttle", districtFirstNames[0], districtFirstNames[1]);
-                }
-                else if (!nonDistrict)
-                {
-                    name = String.Format("{0} {1} Express", districtFirstNames[0], districtFirstNames[1]);
-                }
-                else
-                {
-                    name = String.Format("{0} via {1}", districtFirstNames[0], districtFirstNames[1]);
-                }
-            }
-            else
-            {
-                int totalLength = districtFirstNames.Sum(d => d.Length);
-                if (totalLength < 15)
-                {
-                    var districtFirstNamesArray = districtFirstNames.ToArray();
-                    name = String.Format("{0} and {1} via {2}",
-                        String.Join(", ", districtFirstNamesArray, 0, districtFirstNamesArray.Length - 2),
-                        districtFirstNamesArray[districtFirstNamesArray.Length - 1],
-                        districtFirstNamesArray[districtFirstNamesArray.Length - 2]);
-                }
-                else
-                {
-                    name = String.Format(_trains[Random.Range(0, _trains.Length)], districtNames.First());
-                }
+                case 0:
+                    var theSimulationManager = Singleton<SimulationManager>.instance;
+                    name = String.Format(_trains[Random.Range(0, _trains.Length)], theSimulationManager.m_metaData.m_CityName);
+                    break;
+
+                case 1:
+                    name = String.Format(_trains[Random.Range(0, _trains.Length)], analysis.Districts[0]);
+                    break;
+
+                case 2:
+                    if (districtFirstNames[0].Equals(districtFirstNames[1]))
+                    {
+                        name = districtFirstNames[0];
+                    }
+                    else if (analysis.StopCount == 2)
+                    {
+                        name = String.Format("{0} {1} Shuttle", districtFirstNames[0], districtFirstNames[1]);
+                    }
+                    else if (!analysis.HasNonDistrictStop)
+                    {
+                        name = String.Format("{0} {1} Express", districtFirstNames[0], districtFirstNames[1]);
+                    }
+                    else
+                    {
+                        name = String.Format("{0} via {1}", districtFirstNames[0], districtFirstNames[1]);
+                    }
+                    break;
+
+                default:
+                    int totalLength = districtFirstNames.Sum(d => d.Length);
+                    if (totalLength < 15)
+                    {
+                        var districtFirstNamesArray = districtFirstNames.ToArray();
+                        name = String.Format("{0} and {1} via {2}",
+                            String.Join(", ", districtFirstNamesArray, 0, districtFirstNamesArray.Length - 2),
+                            districtFirstNamesArray[districtFirstNamesArray.Length - 1],
+                            districtFirstNamesArray[districtFirstNamesArray.Length - 2]);
+                    }
+                    else
+                    {
+                        name = String.Format(_trains[Random.Range(0, _trains.Length)], analysis.Districts[0]);
+                    }
+                    break;
             }
 
             var lineNumber = String.Format("{0}{1:00}", ident, number);
