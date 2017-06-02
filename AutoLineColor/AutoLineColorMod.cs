@@ -4,6 +4,9 @@ using System.Collections.Generic;
 
 namespace AutoLineColor
 {
+    // TODO: Button to force-rename a line (or all lines).
+    // TODO: Option to use different strategies for each transport type.
+
     public class AutoLineColorMod : IUserMod
     {
         private Configuration Config;

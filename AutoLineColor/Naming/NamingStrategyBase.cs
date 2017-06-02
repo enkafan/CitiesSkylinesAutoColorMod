@@ -6,6 +6,8 @@ using System.Text;
 
 namespace AutoLineColor.Naming
 {
+    // TODO: Refactor the logic for making names/numbers unique so all strategies can use it.
+
     struct LineAnalysis
     {
         public int StopCount;
